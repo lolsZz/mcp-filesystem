@@ -189,6 +189,13 @@ func NewFilesystemServer(allowedDirs []string) (*FilesystemServer, error) {
 		normalized = append(normalized, filepath.Clean(strings.ToLower(abs)))
 	}
 
+	// Set working directory to first allowed directory
+	if len(normalized) > 0 {
+		if err := os.Chdir(normalized[0]); err != nil {
+			return nil, fmt.Errorf("failed to set working directory: %w", err)
+		}
+	}
+
 	s := &FilesystemServer{
 		allowedDirs: normalized,
 		server: server.NewMCPServer(
@@ -246,7 +253,16 @@ func (s *FilesystemServer) validatePath(requestedPath string) (string, error) {
 
 	normalized := filepath.Clean(strings.ToLower(abs))
 
+	// First try with current working directory if path is relative
+	if !filepath.IsAbs(requestedPath) {
+		cwd, err := os.Getwd()
+		if err == nil {
+			normalized = filepath.Clean(strings.ToLower(filepath.Join(cwd, requestedPath)))
+		}
+	}
+
 	for _, dir := range s.allowedDirs {
+		// Prioritize working directory matches first
 		if strings.HasPrefix(normalized, dir) {
 			realPath, err := filepath.EvalSymlinks(abs)
 			if err != nil {
