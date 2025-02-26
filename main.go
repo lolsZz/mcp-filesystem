@@ -30,6 +30,7 @@ type CacheEntry struct {
 
 type FilesystemServer struct {
 	allowedDirs  []string
+	originalDirs []string
 	server       *server.MCPServer
 	cache        map[string]*CacheEntry
 	cacheMutex   sync.RWMutex
@@ -172,35 +173,40 @@ func (s *FilesystemServer) atomicWrite(path string, content []byte, perm os.File
 
 func NewFilesystemServer(allowedDirs []string) (*FilesystemServer, error) {
 	normalized := make([]string, 0, len(allowedDirs))
+	originals := make([]string, 0, len(allowedDirs))
+
 	for _, dir := range allowedDirs {
 		abs, err := filepath.Abs(dir)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve path %s: %w", dir, err)
 		}
 
-		info, err := os.Stat(abs)
+		clean := filepath.Clean(abs)
+		info, err := os.Stat(clean)
 		if err != nil {
-			return nil, fmt.Errorf("failed to access directory %s: %w", abs, err)
+			return nil, fmt.Errorf("failed to access directory %s: %w", clean, err)
 		}
 		if !info.IsDir() {
-			return nil, fmt.Errorf("path is not a directory: %s", abs)
+			return nil, fmt.Errorf("path is not a directory: %s", clean)
 		}
 
-		normalized = append(normalized, filepath.Clean(strings.ToLower(abs)))
+		normalized = append(normalized, strings.ToLower(clean))
+		originals = append(originals, clean)
 	}
 
-	// Set working directory to first allowed directory
-	if len(normalized) > 0 {
-		if err := os.Chdir(normalized[0]); err != nil {
+	// Set working directory to first allowed directory using original case
+	if len(originals) > 0 {
+		if err := os.Chdir(originals[0]); err != nil {
 			return nil, fmt.Errorf("failed to set working directory: %w", err)
 		}
 	}
 
 	s := &FilesystemServer{
-		allowedDirs: normalized,
+		allowedDirs:  normalized,
+		originalDirs: originals,
 		server: server.NewMCPServer(
 			"better-filesystem-mcp-server",
-			"0.4.0",
+			"0.4.1",
 			server.WithToolCapabilities(true),
 		),
 		cache:        make(map[string]*CacheEntry),
@@ -240,8 +246,6 @@ func NewFilesystemServer(allowedDirs []string) (*FilesystemServer, error) {
 	}, s.handleReadFile)
 
 	// Other tools remain the same...
-	// (Previous tool registrations for write, batch_read, batch_write, ls, info, find, dirs)
-
 	return s, nil
 }
 
@@ -251,18 +255,9 @@ func (s *FilesystemServer) validatePath(requestedPath string) (string, error) {
 		return "", fmt.Errorf("invalid path: %w", err)
 	}
 
-	normalized := filepath.Clean(strings.ToLower(abs))
-
-	// First try with current working directory if path is relative
-	if !filepath.IsAbs(requestedPath) {
-		cwd, err := os.Getwd()
-		if err == nil {
-			normalized = filepath.Clean(strings.ToLower(filepath.Join(cwd, requestedPath)))
-		}
-	}
+	normalized := strings.ToLower(filepath.Clean(abs))
 
 	for _, dir := range s.allowedDirs {
-		// Prioritize working directory matches first
 		if strings.HasPrefix(normalized, dir) {
 			realPath, err := filepath.EvalSymlinks(abs)
 			if err != nil {
@@ -274,18 +269,18 @@ func (s *FilesystemServer) validatePath(requestedPath string) (string, error) {
 				if err != nil {
 					return "", fmt.Errorf("parent directory does not exist: %s", parent)
 				}
-				normalizedParent := filepath.Clean(strings.ToLower(realParent))
-				for _, dir := range s.allowedDirs {
-					if strings.HasPrefix(normalizedParent, dir) {
-						return abs, nil
+				normalizedParent := strings.ToLower(filepath.Clean(realParent))
+				for j, allowedDir := range s.allowedDirs {
+					if strings.HasPrefix(normalizedParent, allowedDir) {
+						return filepath.Join(s.originalDirs[j], filepath.Base(abs)), nil
 					}
 				}
 				return "", fmt.Errorf("access denied - parent dir")
 			}
-			normalizedReal := filepath.Clean(strings.ToLower(realPath))
-			for _, dir := range s.allowedDirs {
-				if strings.HasPrefix(normalizedReal, dir) {
-					return realPath, nil
+			normalizedReal := strings.ToLower(filepath.Clean(realPath))
+			for j, allowedDir := range s.allowedDirs {
+				if strings.HasPrefix(normalizedReal, allowedDir) {
+					return filepath.Join(s.originalDirs[j], strings.TrimPrefix(realPath, s.originalDirs[j])), nil
 				}
 			}
 			return "", fmt.Errorf("access denied - symlink")
@@ -357,10 +352,6 @@ func (s *FilesystemServer) handleReadFile(arguments map[string]interface{}) (*mc
 		Content: []interface{}{mcp.TextContent{Type: "text", Text: string(content)}},
 	}, nil
 }
-
-// Remaining methods stay the same...
-// validatePath, getFileStats, handleWriteFile, handleBatchRead, handleBatchWrite,
-// handleListDirectory, handleSearchFiles, handleGetFileInfo, handleListAllowedDirectories
 
 func main() {
 	if len(os.Args) < 2 {
