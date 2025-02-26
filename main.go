@@ -194,7 +194,6 @@ func NewFilesystemServer(allowedDirs []string) (*FilesystemServer, error) {
 		originals = append(originals, clean)
 	}
 
-	// Set working directory to first allowed directory using original case
 	if len(originals) > 0 {
 		if err := os.Chdir(originals[0]); err != nil {
 			return nil, fmt.Errorf("failed to set working directory: %w", err)
@@ -245,7 +244,78 @@ func NewFilesystemServer(allowedDirs []string) (*FilesystemServer, error) {
 		},
 	}, s.handleReadFile)
 
-	// Other tools remain the same...
+	s.server.AddTool(mcp.Tool{
+		Name:        "ls",
+		Description: "List directory contents",
+		InputSchema: mcp.ToolInputSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"path": map[string]interface{}{
+					"type":        "string",
+					"description": "Directory path",
+				},
+			},
+		},
+	}, s.handleListDirectory)
+
+	s.server.AddTool(mcp.Tool{
+		Name:        "find",
+		Description: "Find files by pattern",
+		InputSchema: mcp.ToolInputSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"path": map[string]interface{}{
+					"type":        "string",
+					"description": "Base directory for search",
+				},
+				"pattern": map[string]interface{}{
+					"type":        "string",
+					"description": "Search pattern",
+				},
+			},
+		},
+	}, s.handleFind)
+
+	s.server.AddTool(mcp.Tool{
+		Name:        "dirs",
+		Description: "List allowed directories",
+		InputSchema: mcp.ToolInputSchema{
+			Type: "object",
+		},
+	}, s.handleDirs)
+
+	s.server.AddTool(mcp.Tool{
+		Name:        "info",
+		Description: "Get file information",
+		InputSchema: mcp.ToolInputSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"path": map[string]interface{}{
+					"type":        "string",
+					"description": "File path",
+				},
+			},
+		},
+	}, s.handleFileInfo)
+
+	s.server.AddTool(mcp.Tool{
+		Name:        "write",
+		Description: "Write file with atomic operations",
+		InputSchema: mcp.ToolInputSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"path": map[string]interface{}{
+					"type":        "string",
+					"description": "File path",
+				},
+				"content": map[string]interface{}{
+					"type":        "string",
+					"description": "File content",
+				},
+			},
+		},
+	}, s.handleWriteFile)
+
 	return s, nil
 }
 
@@ -280,7 +350,7 @@ func (s *FilesystemServer) validatePath(requestedPath string) (string, error) {
 			normalizedReal := strings.ToLower(filepath.Clean(realPath))
 			for j, allowedDir := range s.allowedDirs {
 				if strings.HasPrefix(normalizedReal, allowedDir) {
-					return filepath.Join(s.originalDirs[j], strings.TrimPrefix(realPath, s.originalDirs[j])), nil
+					return s.originalDirs[j] + strings.TrimPrefix(realPath, s.originalDirs[j]), nil
 				}
 			}
 			return "", fmt.Errorf("access denied - symlink")
@@ -289,26 +359,30 @@ func (s *FilesystemServer) validatePath(requestedPath string) (string, error) {
 	return "", fmt.Errorf("access denied")
 }
 
-func (s *FilesystemServer) Serve() error { return server.ServeStdio(s.server) }
-
-func (s *FilesystemServer) handleCacheControl(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
-	enabled, ok := arguments["enabled"].(bool)
+func (s *FilesystemServer) handleWriteFile(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+	path, ok := arguments["path"].(string)
 	if !ok {
-		return nil, fmt.Errorf("enabled must be a boolean")
+		return nil, fmt.Errorf("path required")
+	}
+	content, ok := arguments["content"].(string)
+	if !ok {
+		return nil, fmt.Errorf("content required")
 	}
 
-	s.cacheEnabled = enabled
-	if !enabled {
-		s.cacheMutex.Lock()
-		s.cache = make(map[string]*CacheEntry)
-		s.cacheMutex.Unlock()
+	validPath, err := s.validatePath(path)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.atomicWrite(validPath, []byte(content), 0644); err != nil {
+		return &mcp.CallToolResult{
+			Content: []interface{}{mcp.TextContent{Type: "text", Text: err.Error()}},
+			IsError: true,
+		}, nil
 	}
 
 	return &mcp.CallToolResult{
-		Content: []interface{}{mcp.TextContent{
-			Type: "text",
-			Text: fmt.Sprintf("Cache %s", map[bool]string{true: "enabled", false: "disabled"}[enabled]),
-		}},
+		Content: []interface{}{mcp.TextContent{Type: "text", Text: "File written successfully"}},
 	}, nil
 }
 
@@ -351,6 +425,141 @@ func (s *FilesystemServer) handleReadFile(arguments map[string]interface{}) (*mc
 	return &mcp.CallToolResult{
 		Content: []interface{}{mcp.TextContent{Type: "text", Text: string(content)}},
 	}, nil
+}
+
+func (s *FilesystemServer) handleListDirectory(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+	path, ok := arguments["path"].(string)
+	if !ok {
+		path = "."
+	}
+
+	validPath, err := s.validatePath(path)
+	if err != nil {
+		return nil, err
+	}
+
+	entries, err := os.ReadDir(validPath)
+	if err != nil {
+		return &mcp.CallToolResult{
+			Content: []interface{}{mcp.TextContent{Type: "text", Text: err.Error()}},
+			IsError: true,
+		}, nil
+	}
+
+	var listing strings.Builder
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		listing.WriteString(fmt.Sprintf("%s %8d %s\n", info.Mode(), info.Size(), entry.Name()))
+	}
+
+	return &mcp.CallToolResult{
+		Content: []interface{}{mcp.TextContent{Type: "text", Text: listing.String()}},
+	}, nil
+}
+
+func (s *FilesystemServer) handleFind(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+	path, ok := arguments["path"].(string)
+	if !ok {
+		path = "."
+	}
+
+	pattern, ok := arguments["pattern"].(string)
+	if !ok {
+		return nil, fmt.Errorf("pattern required")
+	}
+
+	validPath, err := s.validatePath(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var matches []string
+	err = filepath.Walk(validPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if matched, _ := filepath.Match(pattern, info.Name()); matched {
+			matches = append(matches, path)
+		}
+		return nil
+	})
+
+	if err != nil {
+		return &mcp.CallToolResult{
+			Content: []interface{}{mcp.TextContent{Type: "text", Text: err.Error()}},
+			IsError: true,
+		}, nil
+	}
+
+	return &mcp.CallToolResult{
+		Content: []interface{}{mcp.TextContent{Type: "text", Text: strings.Join(matches, "\n")}},
+	}, nil
+}
+
+func (s *FilesystemServer) handleDirs(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+	var result strings.Builder
+	for _, dir := range s.originalDirs {
+		result.WriteString(dir)
+		result.WriteString("\n")
+	}
+	return &mcp.CallToolResult{
+		Content: []interface{}{mcp.TextContent{Type: "text", Text: result.String()}},
+	}, nil
+}
+
+func (s *FilesystemServer) handleFileInfo(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+	path, ok := arguments["path"].(string)
+	if !ok {
+		return nil, fmt.Errorf("path required")
+	}
+
+	validPath, err := s.validatePath(path)
+	if err != nil {
+		return nil, err
+	}
+
+	info, err := os.Stat(validPath)
+	if err != nil {
+		return &mcp.CallToolResult{
+			Content: []interface{}{mcp.TextContent{Type: "text", Text: err.Error()}},
+			IsError: true,
+		}, nil
+	}
+
+	return &mcp.CallToolResult{
+		Content: []interface{}{mcp.TextContent{
+			Type: "text",
+			Text: fmt.Sprintf("%s %d %s", info.Mode(), info.Size(), info.ModTime()),
+		}},
+	}, nil
+}
+
+func (s *FilesystemServer) handleCacheControl(arguments map[string]interface{}) (*mcp.CallToolResult, error) {
+	enabled, ok := arguments["enabled"].(bool)
+	if !ok {
+		return nil, fmt.Errorf("enabled must be a boolean")
+	}
+
+	s.cacheEnabled = enabled
+	if !enabled {
+		s.cacheMutex.Lock()
+		s.cache = make(map[string]*CacheEntry)
+		s.cacheMutex.Unlock()
+	}
+
+	return &mcp.CallToolResult{
+		Content: []interface{}{mcp.TextContent{
+			Type: "text",
+			Text: fmt.Sprintf("Cache %s", map[bool]string{true: "enabled", false: "disabled"}[enabled]),
+		}},
+	}, nil
+}
+
+func (s *FilesystemServer) Serve() error {
+	return server.ServeStdio(s.server)
 }
 
 func main() {
