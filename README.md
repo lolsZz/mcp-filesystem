@@ -1,4 +1,4 @@
-# Filesystem MCP Server
+# Better Filesystem MCP Server (BFMS)
 
 High-performance filesystem operations server with atomic writes, caching, and parallel processing capabilities.
 
@@ -192,19 +192,19 @@ List allowed directories.
 
 ## Version History
 
-### v0.4.0
-
-- Added cache control system
-- Implemented batch operations
-- Added compression support
-- Improved error handling
-
 ### v0.4.1
 
 - Fixed working directory handling for relative paths
 - Server now sets its working directory to first allowed directory
 - Improved path validation for better file placement control
 - Contributed by Martin Magala (martin@osl-ai.com)
+
+### v0.4.0
+
+- Added cache control system
+- Implemented batch operations
+- Added compression support
+- Improved error handling
 
 ### v0.3.0
 

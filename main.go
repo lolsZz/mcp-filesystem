@@ -199,7 +199,7 @@ func NewFilesystemServer(allowedDirs []string) (*FilesystemServer, error) {
 	s := &FilesystemServer{
 		allowedDirs: normalized,
 		server: server.NewMCPServer(
-			"filesystem-server",
+			"better-filesystem-mcp-server",
 			"0.4.0",
 			server.WithToolCapabilities(true),
 		),
