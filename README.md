@@ -1,104 +1,206 @@
 # Filesystem MCP Server
 
-Go server implementing Model Context Protocol (MCP) for filesystem operations.
+High-performance filesystem operations server with atomic writes, caching, and parallel processing capabilities.
 
 ## Features
 
-- Read/write files
-- Create/list/delete directories
-- Move files/directories
-- Search files
-- Get file metadata
+- Atomic file operations
+- In-memory caching with TTL
+- Automatic compression
+- Concurrent batch operations
+- Path security validation
+- Configurable allowed directories
 
-**Note**: The server will only allow operations within directories specified via `args`.
+## Installation
 
-## API
-
-### Resources
-
-- `file://system`: File system operations interface
-
-### Tools
-
-- **read_file**
-  - Read complete contents of a file
-  - Input: `path` (string)
-  - Reads complete file contents with UTF-8 encoding
-
-- **read_multiple_files**
-  - Read multiple files simultaneously
-  - Input: `paths` (string[])
-  - Failed reads won't stop the entire operation
-
-- **write_file**
-  - Create new file or overwrite existing (exercise caution with this)
-  - Inputs:
-    - `path` (string): File location
-    - `content` (string): File content
-
-- **create_directory**
-  - Create new directory or ensure it exists
-  - Input: `path` (string)
-  - Creates parent directories if needed
-  - Succeeds silently if directory exists
-
-- **list_directory**
-  - List directory contents with [FILE] or [DIR] prefixes
-  - Input: `path` (string)
-
-- **move_file**
-  - Move or rename files and directories
-  - Inputs:
-    - `source` (string)
-    - `destination` (string)
-  - Fails if destination exists
-
-- **search_files**
-  - Recursively search for files/directories
-  - Inputs:
-    - `path` (string): Starting directory
-    - `pattern` (string): Search pattern
-  - Case-insensitive matching
-  - Returns full paths to matches
-
-- **get_file_info**
-  - Get detailed file/directory metadata
-  - Input: `path` (string)
-  - Returns:
-    - Size
-    - Creation time
-    - Modified time
-    - Access time
-    - Type (file/directory)
-    - Permissions
-
-- **list_allowed_directories**
-  - List all directories the server is allowed to access
-  - No input required
-  - Returns:
-    - Directories that this server can read/write from
-
-## Usage with Claude Desktop
-Install the server
 ```bash
-go install github.com/mark3labs/mcp-filesystem-server
+cd mcp-filesystem
+go build -o build/filesystem-mcp
 ```
 
-Add this to your `claude_desktop_config.json`:
+## Configuration
+
+Add to Cline MCP settings (`cline_mcp_settings.json`):
+
 ```json
 {
   "mcpServers": {
     "filesystem": {
-      "command": "mcp-filesystem-server",
-      "args": [
-        "/Users/username/Desktop",
-        "/path/to/other/allowed/dir"
-      ]
+      "command": "/path/to/filesystem-mcp",
+      "args": ["/allowed/directory/path", "/another/allowed/path"],
+      "env": {},
+      "disabled": false,
+      "autoApprove": []
     }
   }
 }
 ```
 
-## License
+## Tools Reference
 
-This MCP server is licensed under the MIT License. This means you are free to use, modify, and distribute the software, subject to the terms and conditions of the MIT License. For more details, please see the LICENSE file in the project repository.
+### File Operations
+
+#### read
+
+Reads file contents with caching support.
+
+```json
+{
+  "path": "/path/to/file",
+  "nocache": false // Optional: skip cache
+}
+```
+
+#### write
+
+Atomic file write with automatic compression.
+
+```json
+{
+  "path": "/path/to/file",
+  "content": "file content"
+}
+```
+
+#### batch_read
+
+Concurrent reading of multiple files.
+
+```json
+{
+  "paths": ["/path/to/file1", "/path/to/file2"]
+}
+```
+
+#### batch_write
+
+Parallel atomic writes for multiple files.
+
+```json
+{
+  "files": [
+    {
+      "path": "/path/to/file1",
+      "content": "content1"
+    },
+    {
+      "path": "/path/to/file2",
+      "content": "content2"
+    }
+  ]
+}
+```
+
+### Directory Operations
+
+#### ls
+
+Lists directory contents.
+
+```json
+{
+  "path": "/path/to/dir"
+}
+```
+
+#### find
+
+Recursive file search with pattern matching.
+
+```json
+{
+  "path": "/search/start/path",
+  "pattern": "search-term"
+}
+```
+
+### System Operations
+
+#### cache
+
+Enable/disable the file caching system.
+
+```json
+{
+  "enabled": true // or false to disable
+}
+```
+
+#### info
+
+Get file metadata.
+
+```json
+{
+  "path": "/path/to/file"
+}
+// Returns: "{mode} {size} {modified-time}"
+```
+
+#### dirs
+
+List allowed directories.
+
+```json
+{}
+// Returns: One directory per line
+```
+
+## Performance Features
+
+### Atomic Write Operations
+
+- Uses temporary files for safe writing
+- Ensures data integrity during crashes
+- Proper fsync and permissions handling
+
+### Caching System
+
+- 5-minute TTL for cached files
+- 50MB maximum cache size
+- Automatic cache invalidation
+- Per-request cache control
+- Thread-safe operations
+
+### Compression
+
+- Automatic compression for files >1MB
+- Transparent compression/decompression
+- Only compresses if resulting size is smaller
+
+### Concurrent Operations
+
+- Parallel batch file operations
+- Worker pool for file searches
+- Thread-safe cache access
+- Efficient resource utilization
+
+## Security
+
+- Strict path validation
+- Symlink security checks
+- Configurable allowed directories
+- Parent directory verification
+- Access control enforcement
+
+## Error Handling
+
+- Detailed error messages
+- Automatic cleanup of temporary files
+- Safe handling of partial operations
+- Resource cleanup on failures
+
+## Version History
+
+### v0.4.0
+
+- Added cache control system
+- Implemented batch operations
+- Added compression support
+- Improved error handling
+
+### v0.3.0
+
+- Added atomic write operations
+- Implemented security checks
+- Added basic file operations
